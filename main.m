@@ -227,7 +227,7 @@
 		pvc.delegate = self;
 		[pvc loadProductWithParameters:@{ SKStoreProductParameterITunesItemIdentifier: @"592012721" } completionBlock:^(BOOL result, NSError *error) {
 			if (result) {
-				[viewController presentModalViewController:pvc animated:YES];
+				[viewController presentViewController:pvc animated:YES completion:nil];
 			}
 		}];
 	} else {
@@ -275,9 +275,10 @@
 		if (isAppMessagesSupported) {
 			if ([connectedWatches objectForKey:@[watch]])
 				return;
-			static uint8_t bytes[] = MY_UUID;
-			NSData *uuid = [NSData dataWithBytesNoCopy:bytes length:sizeof(bytes) freeWhenDone:NO];
-			[watch appMessagesSetUUID:uuid];
+			uuid_t myAppUUIDbytes;
+			NSUUID *myAppUUID = [[NSUUID alloc] initWithUUIDString:@"A30F3084-E694-4F7B-8F49-61A2E1ECBEE5"];
+			[myAppUUID getUUIDBytes:myAppUUIDbytes];
+			[[PBPebbleCentral defaultCentral] setAppUUID:[NSData dataWithBytes:myAppUUIDbytes length:16]];
 			id handle = [watch appMessagesAddReceiveUpdateHandler:updateHandler];
 			[connectedWatches setObject:handle forKey:@[watch]];
 			NSLog(@"Connected to watch: %@", watch);
@@ -321,7 +322,7 @@ static inline NSString *AssignedListenerTitleForEvent(NSString *eventName, NSStr
 {
 	NSString *eventMode = LASharedActivator.currentEventMode;
 	NSDictionary *update = @{
-		@(ACTIVATOR_SET_TEXT): AssignedListenerTitleForEvent(PAEventNameTopButton, eventMode),
+		@(ACTIVATOR_SET_TEXT_TOP): AssignedListenerTitleForEvent(PAEventNameTopButton, eventMode),
 		@(ACTIVATOR_SET_TEXT_MIDDLE): AssignedListenerTitleForEvent(PAEventNameMiddleButton, eventMode),
 		@(ACTIVATOR_SET_TEXT_BOTTOM): AssignedListenerTitleForEvent(PAEventNameBottomButton, eventMode)
 	};
@@ -344,7 +345,7 @@ static inline NSString *AssignedListenerTitleForEvent(NSString *eventName, NSStr
 
 - (void)productViewControllerDidFinish:(SKStoreProductViewController *)storeController
 {
-	[storeController.presentingViewController dismissModalViewControllerAnimated:YES];
+	[storeController.presentingViewController dismissViewControllerAnimated:YES completion:nil];
 }
 
 @end

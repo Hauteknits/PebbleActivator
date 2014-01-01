@@ -1,243 +1,167 @@
-#include "pebble_os.h"
-#include "pebble_app.h"
-#include "pebble_fonts.h"
-#include "resource_ids.auto.h"
+#include <pebble.h>
 #include <stdint.h>
 #include <string.h>
 #include "../../common.h"
 
 #define BITMAP_BUFFER_BYTES 1024
 
-PBL_APP_INFO(MY_UUID, "Activator", "Ryan Petrich", 0x1, 0x0, RESOURCE_ID_IMAGE_ICON_TINY, APP_INFO_STANDARD_APP);
+static Window *window;
+static TextLayer *text_layer_top;
+static TextLayer *text_layer_middle;
+static TextLayer *text_layer_bottom;
 
-static struct WeatherData {
-	Window window;
-	TextLayer text_layer;
-	TextLayer text_layer_middle;
-	TextLayer text_layer_bottom;
-	BitmapLayer icon_layer;
-	GBitmap icon_bitmap;
-	uint8_t bitmap_data[BITMAP_BUFFER_BYTES];
-	AppSync sync;
-	uint8_t sync_buffer[32];
-} s_data;
-
-static void mkbitmap(GBitmap* bitmap, const uint8_t* data)
-{
-	bitmap->addr = (void*)data + 12;
-	bitmap->row_size_bytes = ((uint16_t*)data)[0];
-	bitmap->info_flags = ((uint16_t*)data)[1];
-	bitmap->bounds.origin.x = 0;
-	bitmap->bounds.origin.y = 0;
-	bitmap->bounds.size.w = ((int16_t*)data)[4];
-	bitmap->bounds.size.h = ((int16_t*)data)[5];
-}
-
-static void load_bitmap(uint32_t resource_id)
-{
-	const ResHandle h = resource_get_handle(resource_id);
-	resource_load(h, s_data.bitmap_data, BITMAP_BUFFER_BYTES);
-	mkbitmap(&s_data.icon_bitmap, s_data.bitmap_data);
-}
-
-static void send_cmd(uint8_t cmd, int integer)
-{
+static void send_cmd(uint8_t cmd, int integer) {
 	Tuplet value = TupletInteger(cmd, integer);
-	
+
 	DictionaryIterator *iter;
-	app_message_out_get(&iter);
-	
+	app_message_outbox_begin(&iter);
+
 	if (iter == NULL)
 		return;
-	
+
 	dict_write_tuplet(iter, &value);
 	dict_write_end(iter);
 	
-	app_message_out_send();
-	app_message_out_release();
+	app_message_outbox_send();
 }
 
-void up_single_click_handler(ClickRecognizerRef recognizer, Window *window)
-{
-	(void)recognizer;
-	(void)window;
-	
+static void up_single_click_handler(ClickRecognizerRef recognizer, void *context) {
 	send_cmd(WATCH_KEY_PRESSED, WATCH_KEY_PRESSED_UP);
 }
 
-void up_hold_handler(ClickRecognizerRef recognizer, Window *window)
-{
-	(void)recognizer;
-	(void)window;
-	
+static void up_long_click_handler(ClickRecognizerRef recognizer, void *context) {
 	send_cmd(WATCH_KEY_PRESSED, WATCH_KEY_HELD_UP);
 }
 
-void select_single_click_handler(ClickRecognizerRef recognizer, Window *window)
-{
-	(void)recognizer;
-	(void)window;
-	
+static void select_single_click_handler(ClickRecognizerRef recognizer, void *context) {
 	send_cmd(WATCH_KEY_PRESSED, WATCH_KEY_PRESSED_SELECT);
 }
 
-void select_hold_handler(ClickRecognizerRef recognizer, Window *window)
-{
-	(void)recognizer;
-	(void)window;
-	
+static void select_long_click_handler(ClickRecognizerRef recognizer, void *context) {
 	send_cmd(WATCH_KEY_PRESSED, WATCH_KEY_HELD_SELECT);
 }
 
-void down_single_click_handler(ClickRecognizerRef recognizer, Window *window)
-{
-	(void)recognizer;
-	(void)window;
-	
+static void down_single_click_handler(ClickRecognizerRef recognizer, void *context) {
 	send_cmd(WATCH_KEY_PRESSED, WATCH_KEY_PRESSED_DOWN);
 }
 
-void down_hold_handler(ClickRecognizerRef recognizer, Window *window)
-{
-	(void)recognizer;
-	(void)window;
-	
+static void down_long_click_handler(ClickRecognizerRef recognizer, void *context) {
 	send_cmd(WATCH_KEY_PRESSED, WATCH_KEY_HELD_DOWN);
 }
 
-void click_config_provider(ClickConfig **config, Window *window)
-{
-	(void)window;
-	
-	config[BUTTON_ID_UP]->click.handler = (ClickHandler) up_single_click_handler;
-	config[BUTTON_ID_UP]->long_click.handler = (ClickHandler) up_hold_handler;
-	
-	config[BUTTON_ID_SELECT]->click.handler = (ClickHandler) select_single_click_handler;
-	config[BUTTON_ID_SELECT]->long_click.handler = (ClickHandler) select_hold_handler;
-	
-	config[BUTTON_ID_DOWN]->click.handler = (ClickHandler) down_single_click_handler;
-	config[BUTTON_ID_DOWN]->long_click.handler = (ClickHandler) down_hold_handler;
+static void click_config_provider(void *context) {
+	window_single_click_subscribe(BUTTON_ID_UP, up_single_click_handler);
+	window_long_click_subscribe(BUTTON_ID_UP, 700, up_long_click_handler, NULL);
+
+	window_single_click_subscribe(BUTTON_ID_SELECT, select_single_click_handler);
+	window_long_click_subscribe(BUTTON_ID_SELECT, 700, select_long_click_handler, NULL);
+
+	window_single_click_subscribe(BUTTON_ID_DOWN, down_single_click_handler);
+	window_long_click_subscribe(BUTTON_ID_DOWN, 700, down_long_click_handler, NULL);
 }
 
-static char text_layer_buffer[256];
-static char text_layer_middle_buffer[256];
-static char text_layer_bottom_buffer[256];
-
-static void in_recieved_handler(DictionaryIterator *received, void *context)
-{
-	Tuple *tuple = dict_read_first(received);
+static void in_received_handler(DictionaryIterator *iter, void *context) {
+	Tuple *tuple = dict_read_first(iter);
 	do {
 		switch (tuple->key) {
 			case ACTIVATOR_REQUEST_VERSION:
 				send_cmd(WATCH_RETURN_VERSION, WATCH_VERSION_CURRENT);
 				break;
-			case ACTIVATOR_SET_TEXT:
-				strncpy(text_layer_buffer, tuple->value->cstring, sizeof(text_layer_buffer));
-				text_layer_set_text(&s_data.text_layer, text_layer_buffer);
-				layer_mark_dirty(&s_data.text_layer.layer);
+			case ACTIVATOR_SET_TEXT_TOP:
+				text_layer_set_text(text_layer_top, tuple->value->cstring);
 				break;
 			case ACTIVATOR_SET_TEXT_MIDDLE:
-				strncpy(text_layer_middle_buffer, tuple->value->cstring, sizeof(text_layer_middle_buffer));
-				text_layer_set_text(&s_data.text_layer_middle, text_layer_middle_buffer);
-				layer_mark_dirty(&s_data.text_layer_middle.layer);
+				text_layer_set_text(text_layer_middle, tuple->value->cstring);
 				break;
 			case ACTIVATOR_SET_TEXT_BOTTOM:
-				strncpy(text_layer_bottom_buffer, tuple->value->cstring, sizeof(text_layer_bottom_buffer));
-				text_layer_set_text(&s_data.text_layer_bottom, text_layer_bottom_buffer);
-				layer_mark_dirty(&s_data.text_layer_bottom.layer);
+				text_layer_set_text(text_layer_bottom, tuple->value->cstring);
 				break;
 		}
-	} while((tuple = dict_read_next(received)));
+	} while((tuple = dict_read_next(iter)));
 }
 
-static void in_dropped_handler(void *context, AppMessageResult reason)
-{
+static void in_dropped_handler(AppMessageResult reason, void *context) {
+	APP_LOG(APP_LOG_LEVEL_DEBUG, "Incoming AppMessage from Pebble dropped, %d", reason);
 }
 
-static void out_failed_handler(DictionaryIterator *failed, AppMessageResult reason, void *context)
-{
-	text_layer_set_text(&s_data.text_layer_middle, "Failed to send!");
-	layer_mark_dirty(&s_data.text_layer_middle.layer);
+static void out_sent_handler(DictionaryIterator *sent, void *context) {
+	// outgoing message was delivered
 }
 
-static AppMessageCallbacksNode app_callbacks = {
-	.callbacks = {
-		.in_received = in_recieved_handler,
-		.in_dropped = in_dropped_handler,
-		.out_failed = out_failed_handler,
-	},
-	.context = NULL
-};
+static void out_failed_handler(DictionaryIterator *failed, AppMessageResult reason, void *context) {
+	APP_LOG(APP_LOG_LEVEL_DEBUG, "Failed to send AppMessage to Pebble");
+	text_layer_set_text(text_layer_middle, "Failed to send!");
+}
 
-static void app_init(AppContextRef c)
-{
-	(void) c;
-
-	resource_init_current_app(&ACTIVATOR_APP_RESOURCES);
-
-	Window* window = &s_data.window;
-	window_init(window, "Activator");
-	window_set_background_color(window, GColorBlack);
-	window_set_fullscreen(window, true);
-
-	/*GRect icon_rect = (GRect) {(GPoint) {32, 20}, (GSize) { 80, 80 }};
-	bitmap_layer_init(&s_data.icon_layer, icon_rect);
-	load_bitmap(RESOURCE_ID_IMAGE_ICON);
-	bitmap_layer_set_bitmap(&s_data.icon_layer, &s_data.icon_bitmap);
-	layer_add_child(&window->layer, &s_data.icon_layer.layer);*/
+static void window_load(Window *window) {
+	Layer *window_layer = window_get_root_layer(window);
 
 	GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
 
-	text_layer_init(&s_data.text_layer, GRect(0, 10, 144, 68));
-	text_layer_set_text_color(&s_data.text_layer, GColorWhite);
-	text_layer_set_background_color(&s_data.text_layer, GColorClear);
-	text_layer_set_font(&s_data.text_layer, font);
-	text_layer_set_text_alignment(&s_data.text_layer, GTextAlignmentCenter);
-	text_layer_set_text(&s_data.text_layer, "");
-	text_layer_set_overflow_mode(&s_data.text_layer, GTextOverflowModeTrailingEllipsis);
-	layer_add_child(&window->layer, &s_data.text_layer.layer);
+	text_layer_top = text_layer_create(GRect(0, 0, 144, 68));
+	text_layer_set_text_color(text_layer_top, GColorWhite);
+	text_layer_set_background_color(text_layer_top, GColorClear);
+	text_layer_set_font(text_layer_top, font);
+	text_layer_set_text_alignment(text_layer_top, GTextAlignmentCenter);
+	text_layer_set_text(text_layer_top, "");
+	text_layer_set_overflow_mode(text_layer_top, GTextOverflowModeTrailingEllipsis);
 
-	text_layer_init(&s_data.text_layer_middle, GRect(0, 70, 144, 68));
-	text_layer_set_text_color(&s_data.text_layer_middle, GColorWhite);
-	text_layer_set_background_color(&s_data.text_layer_middle, GColorClear);
-	text_layer_set_font(&s_data.text_layer_middle, font);
-	text_layer_set_text_alignment(&s_data.text_layer_middle, GTextAlignmentCenter);
-	text_layer_set_text(&s_data.text_layer_middle, "Loading...");
-	text_layer_set_overflow_mode(&s_data.text_layer_middle, GTextOverflowModeTrailingEllipsis);
-	layer_add_child(&window->layer, &s_data.text_layer_middle.layer);
+	text_layer_middle = text_layer_create(GRect(0, 55, 144, 68));
+	text_layer_set_text_color(text_layer_middle, GColorWhite);
+	text_layer_set_background_color(text_layer_middle, GColorClear);
+	text_layer_set_font(text_layer_middle, font);
+	text_layer_set_text_alignment(text_layer_middle, GTextAlignmentCenter);
+	text_layer_set_text(text_layer_middle, "Loading...");
+	text_layer_set_overflow_mode(text_layer_middle, GTextOverflowModeTrailingEllipsis);
 
-	text_layer_init(&s_data.text_layer_bottom, GRect(0, 130, 144, 68));
-	text_layer_set_text_color(&s_data.text_layer_bottom, GColorWhite);
-	text_layer_set_background_color(&s_data.text_layer_bottom, GColorClear);
-	text_layer_set_font(&s_data.text_layer_bottom, font);
-	text_layer_set_text_alignment(&s_data.text_layer_bottom, GTextAlignmentCenter);
-	text_layer_set_text(&s_data.text_layer_bottom, "");
-	text_layer_set_overflow_mode(&s_data.text_layer_bottom, GTextOverflowModeTrailingEllipsis);
-	layer_add_child(&window->layer, &s_data.text_layer_bottom.layer);
+	text_layer_bottom = text_layer_create(GRect(0, 110, 144, 68));
+	text_layer_set_text_color(text_layer_bottom, GColorWhite);
+	text_layer_set_background_color(text_layer_bottom, GColorClear);
+	text_layer_set_font(text_layer_bottom, font);
+	text_layer_set_text_alignment(text_layer_bottom, GTextAlignmentCenter);
+	text_layer_set_text(text_layer_bottom, "");
+	text_layer_set_overflow_mode(text_layer_bottom, GTextOverflowModeTrailingEllipsis);
 
-	window_set_click_config_provider(window, (ClickConfigProvider) click_config_provider);
-	window_stack_push(window, true);
-	app_message_register_callbacks(&app_callbacks);
+	layer_add_child(window_layer, text_layer_get_layer(text_layer_top));
+	layer_add_child(window_layer, text_layer_get_layer(text_layer_middle));
+	layer_add_child(window_layer, text_layer_get_layer(text_layer_bottom));
+}
+
+static void window_unload(Window *window) {
+	text_layer_destroy(text_layer_top);
+	text_layer_destroy(text_layer_middle);
+	text_layer_destroy(text_layer_bottom);
+}
+
+static void app_message_init(void) {
+	app_message_register_inbox_received(in_received_handler);
+	app_message_register_inbox_dropped(in_dropped_handler);
+	app_message_register_outbox_sent(out_sent_handler);
+	app_message_register_outbox_failed(out_failed_handler);
+	app_message_open(512 /* inbound_size */, 16 /* outbound_size */);
+}
+
+static void init(void) {
+	app_message_init();
+
+	window = window_create();
+	window_set_click_config_provider(window, click_config_provider);
+	window_set_window_handlers(window, (WindowHandlers) {
+		.load = window_load,
+		.unload = window_unload,
+	});
+	window_set_background_color(window, GColorBlack);
+	window_stack_push(window, true /* animated */);
+
 	send_cmd(WATCH_REQUEST_TEXT, 0);
 }
 
-static void app_deinit(AppContextRef c)
-{
-	app_message_deregister_callbacks(&app_callbacks);
-	app_sync_deinit(&s_data.sync);
+static void deinit(void) {
+	window_destroy(window);
 }
 
-void pbl_main(void *params)
-{
-	PebbleAppHandlers handlers = {
-		.init_handler = &app_init,
-		.deinit_handler = &app_deinit,
-		.messaging_info = {
-			.buffer_sizes = {
-				.inbound = 512,
-				.outbound = 16,
-			},
-  		}
-	};
-	app_event_loop(params, &handlers);
+int main(void) {
+	init();
+	app_event_loop();
+	deinit();
 }
